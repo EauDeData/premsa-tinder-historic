@@ -7,6 +7,9 @@ import cv2 as cv # so annoying in tutorials ngl
 import random
 from skimage import data, feature, exposure
 import pytesseract
+from docx import Document
+import pickle as pkl
+import multiprocessing as mp
 
 
 def get_boxes_lines(sample, prop_vertical = 0.7, iter_dilate = 5, dilate_size = 4):
@@ -172,7 +175,7 @@ def extract_boxes(img, filled_image):
         h = stats[i, cv2.CC_STAT_HEIGHT]
         area = stats[i, cv2.CC_STAT_AREA]
         (cX, cY) = centroids[i]
-        if h*w > 0.8*sample.shape[-1] * sample.shape[-2]: continue
+        if h*w > 0.8*img.shape[-1] * img.shape[-2]: continue
         
         output = cv2.rectangle(output, (x, y), (x + w, y + h), (255, 255, 255), 10)
         boxes.append(img[y:y+h, x:x+w])
@@ -191,6 +194,28 @@ def extract_boxes(img, filled_image):
         
     return boxes, output, labeled_img
 
+def mp_all_strings(files, out, thread_num, num_threads):
+    for i in range(thread_num, len(files), num_threads):
+        bbxs, _, _ = extract_boxes(files[i], corner_detector(files[i])[-1])
+        this_document = []
+        print(f"Doing document {i}", end = '\n')
+        for n, bbx in enumerate(bbxs):
+            print(f"Doing bbx {n}", end = '\r')
+            this_document.append(pytesseract.image_to_string(bbx, lang = 'spa', nice = 10))
+        out[i] = (this_document)
+    return None
 
-all_strings = [pytesseract.image_to_string(i, lang = 'spa', nice = 10) for i in [extract_boxes(files[j], corner_detector(files[j])[-1])[0] for j in range(len(files)) ]]
-    
+#all_strings = [pytesseract.image_to_string(i, lang = 'spa', nice = 10) for i in [extract_boxes(files[j], corner_detector(files[j])[-1])[0] for j in range(len(files)) ]]
+files = DataAnuncis('/home/adri/Desktop/cvc/data/tinder-historic/filenames.txt')
+
+threads = 4
+
+
+manager = mp.Manager()
+all_strings = manager.list([0 for i in range(len(files))])
+
+process = [mp.Process(target = mp_all_strings, args=(files, all_strings, i, threads) ) for i in range(threads)]
+[i.start() for i in process]
+[i.join() for i in process]
+
+pkl.dump(all_strings, open('all_strings.pkl', 'w'))
