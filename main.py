@@ -10,6 +10,10 @@ import pytesseract
 from docx import Document
 import pickle as pkl
 import multiprocessing as mp
+from mmocr.utils.ocr import MMOCR
+#mp.set_start_method("spawn")
+
+
 
 
 def get_boxes_lines(sample, prop_vertical = 0.7, iter_dilate = 5, dilate_size = 4):
@@ -194,28 +198,50 @@ def extract_boxes(img, filled_image):
         
     return boxes, output, labeled_img
 
-def mp_all_strings(files, out, thread_num, num_threads):
-    for i in range(thread_num, len(files), num_threads):
-        bbxs, _, _ = extract_boxes(files[i], corner_detector(files[i])[-1])
-        this_document = []
-        print(f"Doing document {i}", end = '\n')
-        for n, bbx in enumerate(bbxs):
-            print(f"Doing bbx {n}", end = '\r')
-            this_document.append(pytesseract.image_to_string(bbx, lang = 'spa', nice = 10))
-        out[i] = (this_document)
-    return None
+
+def get_string(bbx):
+    return pytesseract.image_to_string(bbx, lang = 'spa', nice = 10)
+    
+
+
+
+#### MP INNER FUNCTION ####
+def mp_get_strings(strings, out, n_threads, thread):
+    for i in range(thread, len(strings), n_threads):
+        out.append(get_string(strings[i]))
+###########################
+
+def ad_in_page(files, file_number):
+    
+    
+    threads = 8
+    
+    i = file_number
+    bbxs, _, _ = extract_boxes(files[i][0], corner_detector(files[i][0])[-1])
+    bbxs = [cv.threshold(x,127,255,cv.THRESH_BINARY_INV)[1] for x in bbxs if x.shape[0] * x.shape[1] > 2000] # TODO: Use classifier
+
+    batch = [np.stack([bbx, bbx, bbx]).transpose(1, 2, 0) for bbx in bbxs]
+    print(f"Doing document {file_number}", end = '\n')
+    
+    strings = mp.Manager().list()
+    proc = [mp.Process(target = mp_get_strings, args=(batch, strings, threads, i ,)) for i in range(threads)]
+    [p.start() for p in proc]
+    [p.join() for p in proc]
+
+    return list(strings)
+
+
+
+def all_strings(files):
+    out=[]
+    for i in range(len(files)):
+        out.append(ad_in_page(files, i))
+    return out
+
 
 #all_strings = [pytesseract.image_to_string(i, lang = 'spa', nice = 10) for i in [extract_boxes(files[j], corner_detector(files[j])[-1])[0] for j in range(len(files)) ]]
 files = DataAnuncis('/home/adri/Desktop/cvc/data/tinder-historic/filenames.txt')
 
-threads = 4
+alL_strings = all_strings(files)
 
-
-manager = mp.Manager()
-all_strings = manager.list([0 for i in range(len(files))])
-
-process = [mp.Process(target = mp_all_strings, args=(files, all_strings, i, threads) ) for i in range(threads)]
-[i.start() for i in process]
-[i.join() for i in process]
-
-pkl.dump(all_strings, open('all_strings.pkl', 'w'))
+pkl.dump(list(all_strings), open('all_strings.pkl', 'wb'))
