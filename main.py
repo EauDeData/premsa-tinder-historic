@@ -5,16 +5,40 @@ import matplotlib.pyplot as plt
 import math
 import cv2 as cv # so annoying in tutorials ngl
 import random
+import pickle as pkl
+from skimage import data, feature, exposure
+import pytesseract
+from docx import Document
+import nltk
+from sklearn.feature_extraction.text import TfidfVectorizer
+import multiprocessing as mp
+import string
+import nltk
+import edit_distance
+import torch
+from dataloader import *
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+import cv2 as cv # so annoying in tutorials ngl
+import random
 from skimage import data, feature, exposure
 import pytesseract
 from docx import Document
 import pickle as pkl
 import multiprocessing as mp
 from mmocr.utils.ocr import MMOCR
-#mp.set_start_method("spawn")
+import pytesseract
+from sklearn.mixture import GaussianMixture
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import pipeline, set_seed
+from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
 
 
+processor = TrOCRProcessor.from_pretrained('microsoft/trocr-large-printed')
+model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-large-printed')
 
 def get_boxes_lines(sample, prop_vertical = 0.7, iter_dilate = 5, dilate_size = 4):
     
@@ -198,10 +222,32 @@ def extract_boxes(img, filled_image):
         
     return boxes, output, labeled_img
 
-
 def get_string(bbx):
-    return pytesseract.image_to_string(bbx, lang = 'spa', nice = 10)
+    rect_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 2))
+    ret, bbx = cv2.threshold(bbx, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
+    dilation = cv2.dilate(bbx, rect_kernel, iterations = 1)
     
+    contours, hierarchy = cv2.findContours(dilation, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    total = ''    
+    for cnt in contours[::-1]:
+        x, y, w, h = cv2.boundingRect(cnt)
+        # Cropping the text block for giving input to OCR
+        cropped = bbx[y:y + h, x:x + w]
+
+        
+        crop = np.stack([cropped, cropped, cropped])
+        
+        
+        pixel_values = processor(images=crop, return_tensors="pt").pixel_values
+        generated_ids = model.generate(pixel_values)
+        string = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        
+        
+        total += string + ' '
+
+            
+    
+    return total 
 
 
 
@@ -220,7 +266,7 @@ def ad_in_page(files, file_number):
     bbxs, _, _ = extract_boxes(files[i][0], corner_detector(files[i][0])[-1])
     bbxs = [cv.threshold(x,127,255,cv.THRESH_BINARY_INV)[1] for x in bbxs if x.shape[0] * x.shape[1] > 2000] # TODO: Use classifier
 
-    batch = [np.stack([bbx, bbx, bbx]).transpose(1, 2, 0) for bbx in bbxs]
+    batch = [bbx for bbx in bbxs]
     print(f"Doing document {file_number}", end = '\n')
     
     strings = mp.Manager().list()
@@ -233,9 +279,12 @@ def ad_in_page(files, file_number):
 
 
 def all_strings(files):
-    out=[]
+    out={}
     for i in range(len(files)):
-        out.append(ad_in_page(files, i))
+        print(f"Document {i}\t\t", end = '\r')
+        out[i] = (ad_in_page(files, i))
+        pkl.dump(out, open('all_strings.pkl', 'wb'))
+
     return out
 
 
